@@ -220,6 +220,64 @@ get_anthropic_tools() {
     }
   },
   {
+    "name": "ask_user",
+    "description": "Ask the user a question and wait for their response. Use for confirmations or gathering input.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "question": {"type": "string", "description": "The question to ask the user"},
+        "options": {"type": "array", "items": {"type": "string"}, "description": "Optional list of choices"}
+      },
+      "required": ["question"]
+    }
+  },
+  {
+    "name": "web_fetch",
+    "description": "Fetch content from a URL (returns text/markdown)",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "url": {"type": "string", "description": "The URL to fetch"}
+      },
+      "required": ["url"]
+    }
+  },
+  {
+    "name": "web_search",
+    "description": "Search the web for information",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {"type": "string", "description": "Search query"}
+      },
+      "required": ["query"]
+    }
+  },
+  {
+    "name": "todo",
+    "description": "Manage an internal task list for tracking progress",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "action": {"type": "string", "enum": ["add", "list", "complete", "clear"], "description": "Action to perform"},
+        "items": {"type": ["string", "array"], "description": "Task(s) to add or complete"}
+      },
+      "required": ["action"]
+    }
+  },
+  {
+    "name": "spawn_agent",
+    "description": "Spawn a sub-agent to work on a task in parallel",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "task": {"type": "string", "description": "The task for the sub-agent"},
+        "model": {"type": "string", "description": "Specific model to use (optional)"}
+      },
+      "required": ["task"]
+    }
+  },
+  {
     "name": "done",
     "description": "Mark the task as complete with a summary message",
     "input_schema": {
@@ -401,6 +459,79 @@ get_openai_tools() {
   {
     "type": "function",
     "function": {
+      "name": "ask_user",
+      "description": "Ask the user a question and wait for response",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "question": {"type": "string", "description": "The question to ask"},
+          "options": {"type": "array", "items": {"type": "string"}, "description": "Optional choices"}
+        },
+        "required": ["question"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "web_fetch",
+      "description": "Fetch content from a URL",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "url": {"type": "string", "description": "The URL to fetch"}
+        },
+        "required": ["url"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "web_search",
+      "description": "Search the web for information",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string", "description": "Search query"}
+        },
+        "required": ["query"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "todo",
+      "description": "Manage internal task list",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {"type": "string", "description": "add, list, complete, or clear"},
+          "items": {"type": ["string", "array"], "description": "Task(s) to add or complete"}
+        },
+        "required": ["action"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "spawn_agent",
+      "description": "Spawn sub-agent for parallel work",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task": {"type": "string", "description": "Task for the sub-agent"},
+          "model": {"type": "string", "description": "Specific model (optional)"}
+        },
+        "required": ["task"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "done",
       "description": "Mark task as complete",
       "parameters": {
@@ -438,6 +569,11 @@ AVAILABLE TOOLS:
 - glob(pattern, path?): Find files matching glob pattern (e.g., **/*.ts, src/*.js)
 - list_files(path?, pattern?): List files in directory (shallow)
 - think(thought): Reason/plan without taking action - use this to think through complex problems
+- ask_user(question, options?): Ask user for input or confirmation - BLOCKS until user responds
+- web_fetch(url): Fetch content from a URL (returns text/markdown)
+- web_search(query): Search the web for information
+- todo(action, items?): Manage task list - action: add/list/complete/clear
+- spawn_agent(task, model?): Spawn a sub-agent to work on a task in parallel
 - done(message): Mark task as complete
 
 RESPONSE FORMAT:

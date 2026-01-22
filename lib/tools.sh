@@ -17,6 +17,11 @@
 #   - glob(pattern, path): Find files matching glob pattern
 #   - list_files(path, pattern): List files in directory
 #   - think(thought): Reason/plan without executing (returns thought)
+#   - ask_user(question, options?): Ask user for input/confirmation
+#   - web_fetch(url): Fetch content from a URL
+#   - web_search(query): Search the web
+#   - todo(action, items?): Manage internal task list (add/list/complete/clear)
+#   - spawn_agent(task, model?): Spawn a sub-agent for parallel work
 #   - done(message): Mark task as complete
 #
 # Scope configuration (via .infernorc or environment):
@@ -114,6 +119,40 @@ get_tool_schema() {
       "params": {"thought": "string (required) - your reasoning or plan"}
     },
     {
+      "name": "ask_user",
+      "description": "Ask the user a question and wait for their response. Use for confirmations or gathering input.",
+      "params": {
+        "question": "string (required) - the question to ask",
+        "options": "array (optional) - list of options for user to choose from"
+      }
+    },
+    {
+      "name": "web_fetch",
+      "description": "Fetch content from a URL (returns text/markdown)",
+      "params": {"url": "string (required) - the URL to fetch"}
+    },
+    {
+      "name": "web_search",
+      "description": "Search the web for information",
+      "params": {"query": "string (required) - search query"}
+    },
+    {
+      "name": "todo",
+      "description": "Manage an internal task list for tracking progress",
+      "params": {
+        "action": "string (required) - add, list, complete, or clear",
+        "items": "array/string (optional) - task(s) to add or complete"
+      }
+    },
+    {
+      "name": "spawn_agent",
+      "description": "Spawn a sub-agent to work on a task in parallel",
+      "params": {
+        "task": "string (required) - the task for the sub-agent",
+        "model": "string (optional) - specific model to use"
+      }
+    },
+    {
       "name": "done",
       "description": "Mark the task as complete",
       "params": {"message": "string (required) - completion message"}
@@ -138,6 +177,11 @@ Available tools:
 - glob(pattern, path?): Find files matching pattern (e.g., **/*.ts)
 - list_files(path?, pattern?): List files in directory
 - think(thought): Reason/plan without taking action
+- ask_user(question, options?): Ask user for input/confirmation
+- web_fetch(url): Fetch content from a URL
+- web_search(query): Search the web for information
+- todo(action, items?): Manage task list (add/list/complete/clear)
+- spawn_agent(task, model?): Run sub-agent in parallel
 - done(message): Mark task as complete
 EOF
 }
@@ -308,8 +352,12 @@ validate_scope() {
                 return 1
             fi
             ;;
-        done|think)
+        done|think|ask_user|todo)
             # Always allowed
+            return 0
+            ;;
+        web_fetch|web_search|spawn_agent)
+            # Allowed but may require network
             return 0
             ;;
         *)
@@ -376,6 +424,21 @@ execute_tool() {
             ;;
         think)
             execute_think "$params"
+            ;;
+        ask_user)
+            execute_ask_user "$params"
+            ;;
+        web_fetch)
+            execute_web_fetch "$params"
+            ;;
+        web_search)
+            execute_web_search "$params"
+            ;;
+        todo)
+            execute_todo "$params"
+            ;;
+        spawn_agent)
+            execute_spawn_agent "$params"
             ;;
         done)
             execute_done "$params"
@@ -811,6 +874,297 @@ execute_think() {
     echo "💭 Thinking: $thought"
     # Think tool doesn't do anything - just lets the model reason
     # Return success so it can continue
+}
+
+# Tool: ask_user
+# Ask user for input/confirmation
+execute_ask_user() {
+    local params="$1"
+    local question options
+    question=$(echo "$params" | jq -r '.question')
+    options=$(echo "$params" | jq -r '.options // empty')
+
+    if [ -z "$question" ] || [ "$question" = "null" ]; then
+        echo "ERROR: ask_user requires 'question' parameter"
+        return 1
+    fi
+
+    echo ""
+    echo "┌─────────────────────────────────────────────────────────────┐"
+    echo "│ 🤖 AGENT QUESTION                                           │"
+    echo "├─────────────────────────────────────────────────────────────┤"
+    echo "│ $question"
+    echo "└─────────────────────────────────────────────────────────────┘"
+
+    # If options provided, show them
+    if [ -n "$options" ] && [ "$options" != "null" ]; then
+        echo ""
+        echo "Options:"
+        echo "$options" | jq -r 'to_entries | .[] | "  \(.key + 1). \(.value)"'
+        echo ""
+        read -p "Enter choice (number or text): " user_response
+    else
+        echo ""
+        read -p "Your response: " user_response
+    fi
+
+    if [ -z "$user_response" ]; then
+        echo "⚠️ No response provided (empty)"
+    else
+        echo "✓ User responded: $user_response"
+    fi
+
+    echo "$user_response"
+}
+
+# Tool: web_fetch
+# Fetch content from a URL
+execute_web_fetch() {
+    local params="$1"
+    local url
+    url=$(echo "$params" | jq -r '.url')
+
+    if [ -z "$url" ] || [ "$url" = "null" ]; then
+        echo "ERROR: web_fetch requires 'url' parameter"
+        return 1
+    fi
+
+    # Validate URL format
+    if [[ ! "$url" =~ ^https?:// ]]; then
+        echo "ERROR: Invalid URL format. Must start with http:// or https://"
+        return 1
+    fi
+
+    echo "🌐 Fetching: $url"
+
+    # Use curl with timeout and user agent
+    local content exit_code
+    content=$(curl -sL --max-time 30 \
+        -H "User-Agent: Mozilla/5.0 (compatible; InfernoCLI/1.0)" \
+        "$url" 2>&1)
+    exit_code=$?
+
+    if [ $exit_code -ne 0 ]; then
+        echo "ERROR: Failed to fetch URL (exit code: $exit_code)"
+        echo "$content"
+        return 1
+    fi
+
+    # Check if content is HTML and try to extract text
+    if echo "$content" | head -50 | grep -qi '<html'; then
+        # Try to extract readable text using various methods
+        if command -v lynx &>/dev/null; then
+            content=$(echo "$content" | lynx -stdin -dump -nolist 2>/dev/null | head -500)
+        elif command -v w3m &>/dev/null; then
+            content=$(echo "$content" | w3m -T text/html -dump 2>/dev/null | head -500)
+        elif command -v pandoc &>/dev/null; then
+            content=$(echo "$content" | pandoc -f html -t plain 2>/dev/null | head -500)
+        else
+            # Basic extraction: remove HTML tags
+            content=$(echo "$content" | sed 's/<script[^>]*>.*<\/script>//gi' | \
+                      sed 's/<style[^>]*>.*<\/style>//gi' | \
+                      sed 's/<[^>]*>//g' | \
+                      sed 's/&nbsp;/ /g; s/&lt;/</g; s/&gt;/>/g; s/&amp;/\&/g' | \
+                      tr -s '[:space:]' ' ' | \
+                      head -c 20000)
+        fi
+    fi
+
+    # Truncate if too long
+    if [ ${#content} -gt 50000 ]; then
+        content="${content:0:50000}... (truncated)"
+    fi
+
+    echo "--- Content from $url ---"
+    echo "$content"
+    echo "--- End of content ---"
+}
+
+# Tool: web_search
+# Search the web for information
+execute_web_search() {
+    local params="$1"
+    local query
+    query=$(echo "$params" | jq -r '.query')
+
+    if [ -z "$query" ] || [ "$query" = "null" ]; then
+        echo "ERROR: web_search requires 'query' parameter"
+        return 1
+    fi
+
+    echo "🔍 Searching: $query"
+
+    # URL encode the query
+    local encoded_query
+    encoded_query=$(echo "$query" | jq -sRr @uri)
+
+    # Try DuckDuckGo HTML (no API key needed)
+    local search_url="https://html.duckduckgo.com/html/?q=$encoded_query"
+
+    local content
+    content=$(curl -sL --max-time 30 \
+        -H "User-Agent: Mozilla/5.0 (compatible; InfernoCLI/1.0)" \
+        "$search_url" 2>&1)
+
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Search failed"
+        return 1
+    fi
+
+    # Extract search results (basic parsing)
+    local results
+    results=$(echo "$content" | grep -oE 'class="result__a"[^>]*>[^<]+' | \
+              sed 's/class="result__a"[^>]*>//g' | \
+              head -10)
+
+    if [ -z "$results" ]; then
+        # Try extracting links another way
+        results=$(echo "$content" | grep -oE 'href="[^"]*" class="result__url"' | \
+                  sed 's/href="//g; s/" class="result__url"//g' | \
+                  head -10)
+    fi
+
+    if [ -z "$results" ]; then
+        echo "No results found for: $query"
+        echo "You might want to try web_fetch with a specific URL instead."
+    else
+        echo "Search results for '$query':"
+        echo "$results"
+    fi
+}
+
+# Internal todo list storage (per session)
+INFERNO_TODO_LIST=""
+INFERNO_TODO_COUNT=0
+
+# Tool: todo
+# Manage internal task list
+execute_todo() {
+    local params="$1"
+    local action items
+    action=$(echo "$params" | jq -r '.action')
+    items=$(echo "$params" | jq -r '.items // empty')
+
+    if [ -z "$action" ] || [ "$action" = "null" ]; then
+        echo "ERROR: todo requires 'action' parameter (add/list/complete/clear)"
+        return 1
+    fi
+
+    case "$action" in
+        add)
+            if [ -z "$items" ] || [ "$items" = "null" ]; then
+                echo "ERROR: todo add requires 'items' parameter"
+                return 1
+            fi
+
+            # Handle array or string
+            if echo "$items" | jq -e 'type == "array"' >/dev/null 2>&1; then
+                # Array of items
+                while IFS= read -r item; do
+                    ((INFERNO_TODO_COUNT++))
+                    INFERNO_TODO_LIST="${INFERNO_TODO_LIST}${INFERNO_TODO_COUNT}. [ ] ${item}\n"
+                done < <(echo "$items" | jq -r '.[]')
+            else
+                # Single item
+                ((INFERNO_TODO_COUNT++))
+                INFERNO_TODO_LIST="${INFERNO_TODO_LIST}${INFERNO_TODO_COUNT}. [ ] ${items}\n"
+            fi
+            echo "✓ Added to todo list"
+            printf "%b" "$INFERNO_TODO_LIST"
+            ;;
+
+        list)
+            if [ -z "$INFERNO_TODO_LIST" ]; then
+                echo "📋 Todo list is empty"
+            else
+                echo "📋 Todo list:"
+                printf "%b" "$INFERNO_TODO_LIST"
+            fi
+            ;;
+
+        complete)
+            if [ -z "$items" ] || [ "$items" = "null" ]; then
+                echo "ERROR: todo complete requires 'items' (task number or text)"
+                return 1
+            fi
+
+            # Mark as complete (replace [ ] with [x])
+            if [[ "$items" =~ ^[0-9]+$ ]]; then
+                # By number
+                INFERNO_TODO_LIST=$(printf "%b" "$INFERNO_TODO_LIST" | \
+                    sed "s/^${items}\. \[ \]/\n${items}. [x]/")
+            else
+                # By text match
+                INFERNO_TODO_LIST=$(printf "%b" "$INFERNO_TODO_LIST" | \
+                    sed "s/\[ \] .*${items}.*/[x] &/")
+            fi
+            echo "✓ Marked complete"
+            printf "%b" "$INFERNO_TODO_LIST"
+            ;;
+
+        clear)
+            INFERNO_TODO_LIST=""
+            INFERNO_TODO_COUNT=0
+            echo "✓ Todo list cleared"
+            ;;
+
+        *)
+            echo "ERROR: Unknown todo action '$action'. Use: add, list, complete, clear"
+            return 1
+            ;;
+    esac
+}
+
+# Tool: spawn_agent
+# Spawn a sub-agent for parallel work
+execute_spawn_agent() {
+    local params="$1"
+    local task model
+    task=$(echo "$params" | jq -r '.task')
+    model=$(echo "$params" | jq -r '.model // empty')
+
+    if [ -z "$task" ] || [ "$task" = "null" ]; then
+        echo "ERROR: spawn_agent requires 'task' parameter"
+        return 1
+    fi
+
+    echo "🚀 Spawning sub-agent..."
+    echo "   Task: $task"
+    [ -n "$model" ] && echo "   Model: $model"
+
+    # Get the directory where inferno-cli is located
+    local inferno_dir
+    inferno_dir=$(dirname "${BASH_SOURCE[0]}")/..
+    inferno_dir=$(cd "$inferno_dir" && pwd)
+
+    # Build command
+    local cmd="$inferno_dir/inferno-cli.sh"
+    [ -n "$model" ] && cmd="$cmd --model $model"
+    cmd="$cmd \"$task\""
+
+    # Run in background and capture PID
+    local output_file
+    output_file=$(mktemp)
+
+    echo "   Output: $output_file"
+
+    # Start the sub-agent in background
+    (
+        eval "$cmd" > "$output_file" 2>&1
+        echo "--- Sub-agent completed ---" >> "$output_file"
+    ) &
+
+    local pid=$!
+    echo "   PID: $pid"
+
+    # Store for later retrieval
+    echo "✓ Sub-agent spawned (PID: $pid)"
+    echo "   Check results with: cat $output_file"
+    echo "   Or wait with: wait $pid && cat $output_file"
+
+    # Return the output file path and PID as JSON
+    jq -n --arg pid "$pid" --arg output "$output_file" \
+        '{pid: $pid, output_file: $output}'
 }
 
 # Tool: done
