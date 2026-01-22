@@ -1,0 +1,63 @@
+{
+  "// INFERNO CLI CONFIGURATION": "Copy this file to .infernorc and customize",
+
+  "taskModels": {
+    "// Task routing": "Map task types to optimal models",
+    "architect": "claude-sonnet-4-20250514",
+    "codegen": "deepseek/deepseek-chat",
+    "fix": "claude-sonnet-4-20250514",
+    "review": "claude-sonnet-4-20250514",
+    "test": "deepseek/deepseek-coder"
+  },
+
+  "scope": {
+    "// Scope control": "Restrict what paths and commands the agent can access",
+
+    "paths": [
+      "src/",
+      "tests/",
+      "package.json",
+      "tsconfig.json"
+    ],
+
+    "deny_paths": [
+      "node_modules/",
+      ".env",
+      ".env.*",
+      "*.key",
+      "*.pem",
+      "credentials.*",
+      "secrets/"
+    ],
+
+    "allow_commands": [
+      "npm *",
+      "node *",
+      "tsc *",
+      "npx *",
+      "yarn *",
+      "pnpm *",
+      "vitest *",
+      "jest *",
+      "eslint *",
+      "prettier *"
+    ],
+
+    "deny_commands": [
+      "rm -rf /",
+      "rm -rf /*",
+      "sudo *",
+      "chmod 777 *",
+      "curl * | sh",
+      "wget * | sh"
+    ]
+  },
+
+  "defaults": {
+    "// Default settings": "Override environment variables",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-20250514",
+    "max_iterations": 20,
+    "timeout": 300
+  }
+}
