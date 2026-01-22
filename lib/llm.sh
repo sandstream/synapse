@@ -129,6 +129,31 @@ get_anthropic_tools() {
     }
   },
   {
+    "name": "multi_edit",
+    "description": "Perform multiple edits on a single file in one operation. More efficient than multiple edit_file calls.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "description": "The file path to edit"},
+        "edits": {"type": "array", "items": {"type": "object", "properties": {"old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["old_string", "new_string"]}, "description": "Array of edits to apply"}
+      },
+      "required": ["path", "edits"]
+    }
+  },
+  {
+    "name": "git",
+    "description": "Git version control operations",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "action": {"type": "string", "enum": ["status", "diff", "staged", "add", "commit", "log", "undo", "branch", "stash"], "description": "Git action to perform"},
+        "message": {"type": "string", "description": "Commit message (required for commit action)"},
+        "files": {"type": ["string", "array"], "description": "File(s) for add or diff actions"}
+      },
+      "required": ["action"]
+    }
+  },
+  {
     "name": "delete_file",
     "description": "Delete a file",
     "input_schema": {
@@ -338,6 +363,37 @@ get_openai_tools() {
           "new_string": {"type": "string", "description": "Replacement string"}
         },
         "required": ["path", "old_string", "new_string"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "multi_edit",
+      "description": "Multiple edits on a single file in one operation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string", "description": "The file path to edit"},
+          "edits": {"type": "array", "description": "Array of {old_string, new_string} objects"}
+        },
+        "required": ["path", "edits"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "git",
+      "description": "Git version control operations",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {"type": "string", "description": "status/diff/staged/add/commit/log/undo/branch/stash"},
+          "message": {"type": "string", "description": "Commit message (for commit)"},
+          "files": {"type": ["string", "array"], "description": "File(s) for add/diff"}
+        },
+        "required": ["action"]
       }
     }
   },
@@ -561,6 +617,7 @@ AVAILABLE TOOLS:
 - read_file(path): Read contents of a file
 - write_file(path, content): Write/create a file (overwrites if exists)
 - edit_file(path, old_string, new_string): Edit file by replacing old_string with new_string (old_string must be unique in file)
+- multi_edit(path, edits[]): Multiple edits on one file - edits: [{old_string, new_string}, ...]
 - delete_file(path): Delete a file
 - move_file(source, destination): Move or rename a file
 - mkdir(path): Create a directory (with parents)
@@ -568,6 +625,7 @@ AVAILABLE TOOLS:
 - search(query, path?): Search for pattern in files using grep
 - glob(pattern, path?): Find files matching glob pattern (e.g., **/*.ts, src/*.js)
 - list_files(path?, pattern?): List files in directory (shallow)
+- git(action, message?, files?): Git ops - action: status/diff/staged/add/commit/log/undo/branch/stash
 - think(thought): Reason/plan without taking action - use this to think through complex problems
 - ask_user(question, options?): Ask user for input or confirmation - BLOCKS until user responds
 - web_fetch(url): Fetch content from a URL (returns text/markdown)

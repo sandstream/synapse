@@ -17,6 +17,8 @@
 #   - glob(pattern, path): Find files matching glob pattern
 #   - list_files(path, pattern): List files in directory
 #   - think(thought): Reason/plan without executing (returns thought)
+#   - multi_edit(path, edits[]): Multiple edits on a file in one operation
+#   - git(action, message?, files?): Git operations (status/diff/commit/log/undo/add)
 #   - ask_user(question, options?): Ask user for input/confirmation
 #   - web_fetch(url): Fetch content from a URL
 #   - web_search(query): Search the web
@@ -119,6 +121,23 @@ get_tool_schema() {
       "params": {"thought": "string (required) - your reasoning or plan"}
     },
     {
+      "name": "multi_edit",
+      "description": "Perform multiple edits on a single file in one operation. More efficient than multiple edit_file calls.",
+      "params": {
+        "path": "string (required) - file path to edit",
+        "edits": "array (required) - array of {old_string, new_string} objects"
+      }
+    },
+    {
+      "name": "git",
+      "description": "Git operations for version control",
+      "params": {
+        "action": "string (required) - status, diff, staged, add, commit, log, undo, branch, stash",
+        "message": "string (optional) - commit message (required for commit)",
+        "files": "string/array (optional) - file(s) to add or diff"
+      }
+    },
+    {
       "name": "ask_user",
       "description": "Ask the user a question and wait for their response. Use for confirmations or gathering input.",
       "params": {
@@ -169,10 +188,12 @@ Available tools:
 - read_file(path): Read a file's contents
 - write_file(path, content): Create a new file with content
 - edit_file(path, old_string, new_string): Edit file by replacing string (efficient for changes)
+- multi_edit(path, edits[]): Multiple edits on one file [{old_string, new_string}, ...]
 - delete_file(path): Delete a file
 - move_file(source, destination): Move or rename a file
 - mkdir(path): Create directory
 - bash(command): Run a shell command
+- git(action, message?, files?): Git ops (status/diff/add/commit/log/undo/branch/stash)
 - search(query, path?): Search for pattern in files (grep)
 - glob(pattern, path?): Find files matching pattern (e.g., **/*.ts)
 - list_files(path?, pattern?): List files in directory
@@ -315,7 +336,7 @@ validate_scope() {
     local params="$2"
 
     case "$tool_name" in
-        read_file|write_file|edit_file|delete_file|list_files|mkdir|glob)
+        read_file|write_file|edit_file|multi_edit|delete_file|list_files|mkdir|glob)
             local path
             path=$(echo "$params" | jq -r '.path // "."')
             if ! is_path_allowed "$path"; then
@@ -352,8 +373,8 @@ validate_scope() {
                 return 1
             fi
             ;;
-        done|think|ask_user|todo)
-            # Always allowed
+        done|think|ask_user|todo|git)
+            # Always allowed (git works within repo)
             return 0
             ;;
         web_fetch|web_search|spawn_agent)
@@ -400,6 +421,12 @@ execute_tool() {
             ;;
         edit_file)
             execute_edit_file "$params"
+            ;;
+        multi_edit)
+            execute_multi_edit "$params"
+            ;;
+        git)
+            execute_git "$params"
             ;;
         delete_file)
             execute_delete_file "$params"
@@ -618,6 +645,208 @@ with open('$path', 'w') as f:
     local bytes
     bytes=$(wc -c < "$path")
     echo "✓ Edited: $path ($bytes bytes)"
+}
+
+# Tool: multi_edit
+# Perform multiple edits on a single file in one operation
+execute_multi_edit() {
+    local params="$1"
+    local path edits
+    path=$(echo "$params" | jq -r '.path')
+    edits=$(echo "$params" | jq -c '.edits')
+
+    if [ -z "$path" ] || [ "$path" = "null" ]; then
+        echo "ERROR: multi_edit requires 'path' parameter"
+        return 1
+    fi
+
+    if [ -z "$edits" ] || [ "$edits" = "null" ]; then
+        echo "ERROR: multi_edit requires 'edits' array parameter"
+        return 1
+    fi
+
+    if [ ! -f "$path" ]; then
+        echo "ERROR: File not found: $path"
+        return 1
+    fi
+
+    # Count edits
+    local edit_count
+    edit_count=$(echo "$edits" | jq 'length')
+
+    if [ "$edit_count" -eq 0 ]; then
+        echo "ERROR: edits array is empty"
+        return 1
+    fi
+
+    # Read file content
+    local content
+    content=$(cat "$path")
+
+    # Apply each edit in order
+    local i=0
+    local success_count=0
+    local errors=""
+
+    while [ $i -lt "$edit_count" ]; do
+        local old_string new_string
+        old_string=$(echo "$edits" | jq -r ".[$i].old_string")
+        new_string=$(echo "$edits" | jq -r ".[$i].new_string // \"\"")
+
+        if [ -z "$old_string" ] || [ "$old_string" = "null" ]; then
+            errors="${errors}Edit $((i+1)): missing old_string\n"
+            ((i++))
+            continue
+        fi
+
+        # Check if old_string exists in current content
+        if [[ "$content" != *"$old_string"* ]]; then
+            errors="${errors}Edit $((i+1)): old_string not found\n"
+            ((i++))
+            continue
+        fi
+
+        # Replace (only first occurrence) - use temp var to avoid quoting issues
+        local before="${content%%"$old_string"*}"
+        local after="${content#*"$old_string"}"
+        content="${before}${new_string}${after}"
+        ((success_count++))
+        ((i++))
+    done
+
+    # Write back if any edits succeeded
+    if [ $success_count -gt 0 ]; then
+        printf '%s' "$content" > "$path"
+        local bytes
+        bytes=$(wc -c < "$path")
+        echo "✓ Multi-edit: $path - $success_count/$edit_count edits applied ($bytes bytes)"
+    fi
+
+    # Report errors if any
+    if [ -n "$errors" ]; then
+        printf "⚠️ Some edits failed:\n%b" "$errors"
+    fi
+
+    if [ $success_count -eq 0 ]; then
+        return 1
+    fi
+}
+
+# Tool: git
+# Git operations: status, diff, commit, log, undo
+execute_git() {
+    local params="$1"
+    local action message files
+    action=$(echo "$params" | jq -r '.action')
+    message=$(echo "$params" | jq -r '.message // empty')
+    files=$(echo "$params" | jq -r '.files // empty')
+
+    if [ -z "$action" ] || [ "$action" = "null" ]; then
+        echo "ERROR: git requires 'action' parameter (status/diff/commit/log/undo/add)"
+        return 1
+    fi
+
+    # Check if we're in a git repo
+    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+        echo "ERROR: Not in a git repository"
+        return 1
+    fi
+
+    case "$action" in
+        status)
+            echo "📊 Git Status:"
+            git status --short
+            ;;
+
+        diff)
+            echo "📝 Git Diff:"
+            if [ -n "$files" ] && [ "$files" != "null" ]; then
+                git diff -- "$files"
+            else
+                git diff
+            fi
+            ;;
+
+        staged)
+            echo "📝 Staged Changes:"
+            git diff --cached
+            ;;
+
+        add)
+            if [ -z "$files" ] || [ "$files" = "null" ]; then
+                echo "ERROR: git add requires 'files' parameter"
+                return 1
+            fi
+            # Handle array or string
+            if echo "$files" | jq -e 'type == "array"' >/dev/null 2>&1; then
+                local file_list
+                file_list=$(echo "$files" | jq -r '.[]')
+                echo "$file_list" | while read -r f; do
+                    git add "$f" && echo "✓ Added: $f"
+                done
+            else
+                git add "$files" && echo "✓ Added: $files"
+            fi
+            ;;
+
+        commit)
+            if [ -z "$message" ]; then
+                echo "ERROR: git commit requires 'message' parameter"
+                return 1
+            fi
+            # Check if there are staged changes
+            if git diff --cached --quiet; then
+                echo "⚠️ Nothing staged to commit. Use git add first."
+                return 1
+            fi
+            git commit -m "$message" && echo "✓ Committed: $message"
+            ;;
+
+        log)
+            echo "📜 Git Log (last 10):"
+            git log --oneline -10
+            ;;
+
+        undo)
+            # Undo last commit (keep changes staged)
+            echo "⏪ Undoing last commit..."
+            git reset --soft HEAD~1 && echo "✓ Last commit undone (changes kept staged)"
+            ;;
+
+        branch)
+            echo "🌿 Current branch:"
+            git branch --show-current
+            echo ""
+            echo "All branches:"
+            git branch -a
+            ;;
+
+        stash)
+            local stash_action
+            stash_action=$(echo "$params" | jq -r '.stash_action // "push"')
+            case "$stash_action" in
+                push)
+                    git stash push -m "${message:-Auto stash}" && echo "✓ Changes stashed"
+                    ;;
+                pop)
+                    git stash pop && echo "✓ Stash applied and removed"
+                    ;;
+                list)
+                    git stash list
+                    ;;
+                *)
+                    echo "ERROR: Unknown stash action. Use push/pop/list"
+                    return 1
+                    ;;
+            esac
+            ;;
+
+        *)
+            echo "ERROR: Unknown git action '$action'"
+            echo "Available actions: status, diff, staged, add, commit, log, undo, branch, stash"
+            return 1
+            ;;
+    esac
 }
 
 # Tool: delete_file
