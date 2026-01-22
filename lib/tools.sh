@@ -8,9 +8,15 @@
 # Tools available:
 #   - read_file(path): Read file contents
 #   - write_file(path, content): Write/create file
+#   - edit_file(path, old_string, new_string): Edit file with string replacement
+#   - delete_file(path): Delete a file
+#   - move_file(source, destination): Move or rename a file
+#   - mkdir(path): Create directory
 #   - bash(command): Execute shell command
-#   - search(query, path): Search for pattern in files
-#   - list_files(path, pattern): List files matching pattern
+#   - search(query, path): Search for pattern in files (grep)
+#   - glob(pattern, path): Find files matching glob pattern
+#   - list_files(path, pattern): List files in directory
+#   - think(thought): Reason/plan without executing (returns thought)
 #   - done(message): Mark task as complete
 #
 # Scope configuration (via .infernorc or environment):
@@ -40,11 +46,38 @@ get_tool_schema() {
     },
     {
       "name": "write_file",
-      "description": "Write content to a file (creates directories if needed)",
+      "description": "Write content to a file (creates directories if needed). Use for NEW files.",
       "params": {
         "path": "string (required) - file path to write",
-        "content": "string (required) - content to write"
+        "content": "string (required) - full content to write"
       }
+    },
+    {
+      "name": "edit_file",
+      "description": "Edit an existing file by replacing a specific string. More efficient than write_file for small changes.",
+      "params": {
+        "path": "string (required) - file path to edit",
+        "old_string": "string (required) - exact string to find and replace (must be unique in file)",
+        "new_string": "string (required) - replacement string"
+      }
+    },
+    {
+      "name": "delete_file",
+      "description": "Delete a file",
+      "params": {"path": "string (required) - file path to delete"}
+    },
+    {
+      "name": "move_file",
+      "description": "Move or rename a file",
+      "params": {
+        "source": "string (required) - source file path",
+        "destination": "string (required) - destination file path"
+      }
+    },
+    {
+      "name": "mkdir",
+      "description": "Create a directory (including parent directories)",
+      "params": {"path": "string (required) - directory path to create"}
     },
     {
       "name": "bash",
@@ -53,19 +86,32 @@ get_tool_schema() {
     },
     {
       "name": "search",
-      "description": "Search for pattern in files using grep",
+      "description": "Search for pattern in files using grep (shows matching lines with context)",
       "params": {
         "query": "string (required) - regex pattern to search",
         "path": "string (optional) - directory to search in, default: ."
       }
     },
     {
+      "name": "glob",
+      "description": "Find files matching a glob pattern (e.g., **/*.ts, src/**/*.js)",
+      "params": {
+        "pattern": "string (required) - glob pattern (e.g., **/*.ts)",
+        "path": "string (optional) - base directory, default: ."
+      }
+    },
+    {
       "name": "list_files",
-      "description": "List files in directory with optional pattern",
+      "description": "List files in directory (shallow, use glob for recursive)",
       "params": {
         "path": "string (optional) - directory path, default: .",
-        "pattern": "string (optional) - glob pattern, default: *"
+        "pattern": "string (optional) - filename pattern, default: *"
       }
+    },
+    {
+      "name": "think",
+      "description": "Think/reason about the problem without taking action. Use for planning complex tasks.",
+      "params": {"thought": "string (required) - your reasoning or plan"}
     },
     {
       "name": "done",
@@ -82,10 +128,16 @@ get_tool_schema_compact() {
     cat << 'EOF'
 Available tools:
 - read_file(path): Read a file's contents
-- write_file(path, content): Write content to a file
+- write_file(path, content): Create a new file with content
+- edit_file(path, old_string, new_string): Edit file by replacing string (efficient for changes)
+- delete_file(path): Delete a file
+- move_file(source, destination): Move or rename a file
+- mkdir(path): Create directory
 - bash(command): Run a shell command
-- search(query, path?): Search for pattern in files
+- search(query, path?): Search for pattern in files (grep)
+- glob(pattern, path?): Find files matching pattern (e.g., **/*.ts)
 - list_files(path?, pattern?): List files in directory
+- think(thought): Reason/plan without taking action
 - done(message): Mark task as complete
 EOF
 }
@@ -219,11 +271,24 @@ validate_scope() {
     local params="$2"
 
     case "$tool_name" in
-        read_file|write_file|list_files)
+        read_file|write_file|edit_file|delete_file|list_files|mkdir|glob)
             local path
             path=$(echo "$params" | jq -r '.path // "."')
             if ! is_path_allowed "$path"; then
                 echo "SCOPE_DENIED: Path '$path' is outside allowed scope"
+                return 1
+            fi
+            ;;
+        move_file)
+            local source dest
+            source=$(echo "$params" | jq -r '.source')
+            dest=$(echo "$params" | jq -r '.destination')
+            if ! is_path_allowed "$source"; then
+                echo "SCOPE_DENIED: Source path '$source' is outside allowed scope"
+                return 1
+            fi
+            if ! is_path_allowed "$dest"; then
+                echo "SCOPE_DENIED: Destination path '$dest' is outside allowed scope"
                 return 1
             fi
             ;;
@@ -243,7 +308,7 @@ validate_scope() {
                 return 1
             fi
             ;;
-        done)
+        done|think)
             # Always allowed
             return 0
             ;;
@@ -285,14 +350,32 @@ execute_tool() {
         write_file)
             execute_write_file "$params"
             ;;
+        edit_file)
+            execute_edit_file "$params"
+            ;;
+        delete_file)
+            execute_delete_file "$params"
+            ;;
+        move_file)
+            execute_move_file "$params"
+            ;;
+        mkdir)
+            execute_mkdir "$params"
+            ;;
         bash)
             execute_bash "$params"
             ;;
         search)
             execute_search "$params"
             ;;
+        glob)
+            execute_glob "$params"
+            ;;
         list_files)
             execute_list_files "$params"
+            ;;
+        think)
+            execute_think "$params"
             ;;
         done)
             execute_done "$params"
@@ -330,7 +413,7 @@ execute_read_file() {
         fi
         echo "$content"
     elif [ -d "$path" ]; then
-        echo "ERROR: '$path' is a directory, not a file. Use list_files to see contents."
+        echo "ERROR: '$path' is a directory, not a file. Use list_files or glob to see contents."
         return 1
     else
         echo "ERROR: File not found: $path"
@@ -374,6 +457,192 @@ execute_write_file() {
     local bytes
     bytes=$(wc -c < "$path")
     echo "✓ Written: $path ($bytes bytes)"
+}
+
+# Tool: edit_file
+execute_edit_file() {
+    local params="$1"
+    local path old_string new_string
+    path=$(echo "$params" | jq -r '.path')
+    old_string=$(echo "$params" | jq -r '.old_string')
+    new_string=$(echo "$params" | jq -r '.new_string')
+
+    if [ -z "$path" ] || [ "$path" = "null" ]; then
+        echo "ERROR: edit_file requires 'path' parameter"
+        return 1
+    fi
+
+    if [ -z "$old_string" ] || [ "$old_string" = "null" ]; then
+        echo "ERROR: edit_file requires 'old_string' parameter"
+        return 1
+    fi
+
+    if [ "$new_string" = "null" ]; then
+        new_string=""
+    fi
+
+    if [ ! -f "$path" ]; then
+        echo "ERROR: File not found: $path"
+        return 1
+    fi
+
+    # Read the file
+    local content
+    content=$(cat "$path")
+
+    # Check if old_string exists and is unique
+    local count
+    count=$(grep -F -c "$old_string" "$path" 2>/dev/null || echo "0")
+
+    if [ "$count" -eq 0 ]; then
+        echo "ERROR: String not found in file. Make sure old_string matches exactly."
+        echo "--- First 50 lines of $path ---"
+        head -50 "$path"
+        return 1
+    fi
+
+    if [ "$count" -gt 1 ]; then
+        echo "ERROR: String found $count times in file. old_string must be unique."
+        echo "Add more context to make it unique."
+        echo "--- Matches ---"
+        grep -n -F "$old_string" "$path" | head -10
+        return 1
+    fi
+
+    # Perform the replacement using awk for robustness with special chars
+    local new_content
+    new_content=$(awk -v old="$old_string" -v new="$new_string" '
+    BEGIN { found = 0 }
+    {
+        if (!found && index($0, old) > 0) {
+            # Found the line containing old_string
+            # We need to handle multiline old_string
+            found = 1
+        }
+        print
+    }
+    ' "$path")
+
+    # Use perl for proper multiline replacement (more robust)
+    perl -i -p0e "s/\Q$old_string\E/$new_string/s" "$path" 2>/dev/null
+
+    if [ $? -ne 0 ]; then
+        # Fallback: use temp file approach
+        local temp_file
+        temp_file=$(mktemp)
+
+        # Use Python if available for robust replacement
+        if command -v python3 &>/dev/null; then
+            python3 -c "
+import sys
+with open('$path', 'r') as f:
+    content = f.read()
+old_str = '''$old_string'''
+new_str = '''$new_string'''
+if old_str not in content:
+    sys.exit(1)
+content = content.replace(old_str, new_str, 1)
+with open('$path', 'w') as f:
+    f.write(content)
+" 2>/dev/null
+        else
+            # Last resort: simple sed (may fail with special chars)
+            sed -i.bak "s|$old_string|$new_string|" "$path" 2>/dev/null
+            rm -f "${path}.bak"
+        fi
+    fi
+
+    local bytes
+    bytes=$(wc -c < "$path")
+    echo "✓ Edited: $path ($bytes bytes)"
+}
+
+# Tool: delete_file
+execute_delete_file() {
+    local params="$1"
+    local path
+    path=$(echo "$params" | jq -r '.path')
+
+    if [ -z "$path" ] || [ "$path" = "null" ]; then
+        echo "ERROR: delete_file requires 'path' parameter"
+        return 1
+    fi
+
+    if [ ! -f "$path" ]; then
+        echo "ERROR: File not found: $path"
+        return 1
+    fi
+
+    rm "$path" || {
+        echo "ERROR: Could not delete file: $path"
+        return 1
+    }
+
+    echo "✓ Deleted: $path"
+}
+
+# Tool: move_file
+execute_move_file() {
+    local params="$1"
+    local source dest
+    source=$(echo "$params" | jq -r '.source')
+    dest=$(echo "$params" | jq -r '.destination')
+
+    if [ -z "$source" ] || [ "$source" = "null" ]; then
+        echo "ERROR: move_file requires 'source' parameter"
+        return 1
+    fi
+
+    if [ -z "$dest" ] || [ "$dest" = "null" ]; then
+        echo "ERROR: move_file requires 'destination' parameter"
+        return 1
+    fi
+
+    if [ ! -f "$source" ]; then
+        echo "ERROR: Source file not found: $source"
+        return 1
+    fi
+
+    # Create destination directory if needed
+    local dest_dir
+    dest_dir=$(dirname "$dest")
+    if [ "$dest_dir" != "." ] && [ ! -d "$dest_dir" ]; then
+        mkdir -p "$dest_dir" || {
+            echo "ERROR: Could not create directory: $dest_dir"
+            return 1
+        }
+    fi
+
+    mv "$source" "$dest" || {
+        echo "ERROR: Could not move file from $source to $dest"
+        return 1
+    }
+
+    echo "✓ Moved: $source → $dest"
+}
+
+# Tool: mkdir
+execute_mkdir() {
+    local params="$1"
+    local path
+    path=$(echo "$params" | jq -r '.path')
+
+    if [ -z "$path" ] || [ "$path" = "null" ]; then
+        echo "ERROR: mkdir requires 'path' parameter"
+        return 1
+    fi
+
+    if [ -d "$path" ]; then
+        echo "✓ Directory already exists: $path"
+        return 0
+    fi
+
+    mkdir -p "$path" || {
+        echo "ERROR: Could not create directory: $path"
+        return 1
+    }
+
+    echo "✓ Created directory: $path"
 }
 
 # Tool: bash
@@ -432,7 +701,7 @@ execute_search() {
 
     # Use grep -r with context
     local results
-    results=$(grep -rn "$query" "$path" 2>/dev/null | head -100)
+    results=$(grep -rn --include="*" "$query" "$path" 2>/dev/null | head -100)
 
     if [ -z "$results" ]; then
         echo "No matches found for '$query' in $path"
@@ -451,6 +720,55 @@ execute_search() {
     fi
 }
 
+# Tool: glob
+execute_glob() {
+    local params="$1"
+    local pattern path
+    pattern=$(echo "$params" | jq -r '.pattern')
+    path=$(echo "$params" | jq -r '.path // "."')
+
+    if [ -z "$pattern" ] || [ "$pattern" = "null" ]; then
+        echo "ERROR: glob requires 'pattern' parameter"
+        return 1
+    fi
+
+    if [ ! -d "$path" ]; then
+        echo "ERROR: Directory not found: $path"
+        return 1
+    fi
+
+    # Use find with pattern matching
+    # Handle ** patterns by converting to find syntax
+    local results
+
+    if [[ "$pattern" == "**/"* ]]; then
+        # Pattern like **/*.ts - recursive search
+        local ext_pattern="${pattern#**/}"
+        results=$(find "$path" -type f -name "$ext_pattern" 2>/dev/null | sort | head -200)
+    elif [[ "$pattern" == *"**"* ]]; then
+        # Pattern with ** somewhere - use find recursively
+        local name_pattern="${pattern//\*\*\//}"
+        name_pattern="${name_pattern//\*\*/}"
+        results=$(find "$path" -type f -name "$name_pattern" 2>/dev/null | sort | head -200)
+    else
+        # Simple pattern - use find with maxdepth
+        results=$(find "$path" -maxdepth 5 -type f -name "$pattern" 2>/dev/null | sort | head -200)
+    fi
+
+    if [ -z "$results" ]; then
+        echo "No files found matching '$pattern' in $path"
+    else
+        local count
+        count=$(echo "$results" | wc -l)
+        echo "Found $count files matching '$pattern' in $path:"
+        echo "$results"
+
+        if [ "$count" -ge 200 ]; then
+            echo "... (showing first 200 files)"
+        fi
+    fi
+}
+
 # Tool: list_files
 execute_list_files() {
     local params="$1"
@@ -463,9 +781,9 @@ execute_list_files() {
         return 1
     fi
 
-    # List files with find
+    # List files with find (shallow by default)
     local results
-    results=$(find "$path" -maxdepth 3 -name "$pattern" -type f 2>/dev/null | head -100)
+    results=$(find "$path" -maxdepth 1 -name "$pattern" 2>/dev/null | sort | head -100)
 
     if [ -z "$results" ]; then
         echo "No files found in $path matching '$pattern'"
@@ -477,11 +795,22 @@ execute_list_files() {
 
         # Warn if truncated
         local total
-        total=$(find "$path" -name "$pattern" -type f 2>/dev/null | wc -l)
+        total=$(find "$path" -maxdepth 1 -name "$pattern" 2>/dev/null | wc -l)
         if [ "$total" -gt 100 ]; then
             echo "... (showing 100 of $total files)"
         fi
     fi
+}
+
+# Tool: think
+execute_think() {
+    local params="$1"
+    local thought
+    thought=$(echo "$params" | jq -r '.thought // "No thought provided"')
+
+    echo "💭 Thinking: $thought"
+    # Think tool doesn't do anything - just lets the model reason
+    # Return success so it can continue
 }
 
 # Tool: done

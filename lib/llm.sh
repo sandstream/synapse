@@ -98,30 +98,68 @@ get_anthropic_tools() {
     "input_schema": {
       "type": "object",
       "properties": {
-        "path": {
-          "type": "string",
-          "description": "The file path to read"
-        }
+        "path": {"type": "string", "description": "The file path to read"}
       },
       "required": ["path"]
     }
   },
   {
     "name": "write_file",
-    "description": "Write content to a file at the specified path. Creates directories if needed.",
+    "description": "Write content to a NEW file. Creates directories if needed. For existing files, prefer edit_file.",
     "input_schema": {
       "type": "object",
       "properties": {
-        "path": {
-          "type": "string",
-          "description": "The file path to write to"
-        },
-        "content": {
-          "type": "string",
-          "description": "The content to write to the file"
-        }
+        "path": {"type": "string", "description": "The file path to write to"},
+        "content": {"type": "string", "description": "The full content to write"}
       },
       "required": ["path", "content"]
+    }
+  },
+  {
+    "name": "edit_file",
+    "description": "Edit an existing file by replacing a specific string. More efficient than write_file for changes. The old_string must be unique in the file.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "description": "The file path to edit"},
+        "old_string": {"type": "string", "description": "Exact string to find and replace (must be unique)"},
+        "new_string": {"type": "string", "description": "Replacement string"}
+      },
+      "required": ["path", "old_string", "new_string"]
+    }
+  },
+  {
+    "name": "delete_file",
+    "description": "Delete a file",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "description": "The file path to delete"}
+      },
+      "required": ["path"]
+    }
+  },
+  {
+    "name": "move_file",
+    "description": "Move or rename a file",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "source": {"type": "string", "description": "Source file path"},
+        "destination": {"type": "string", "description": "Destination file path"}
+      },
+      "required": ["source", "destination"]
+    }
+  },
+  {
+    "name": "mkdir",
+    "description": "Create a directory (including parent directories)",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "description": "Directory path to create"}
+      },
+      "required": ["path"]
     }
   },
   {
@@ -130,47 +168,55 @@ get_anthropic_tools() {
     "input_schema": {
       "type": "object",
       "properties": {
-        "command": {
-          "type": "string",
-          "description": "The shell command to execute"
-        }
+        "command": {"type": "string", "description": "The shell command to execute"}
       },
       "required": ["command"]
     }
   },
   {
     "name": "search",
-    "description": "Search for a pattern in files using grep",
+    "description": "Search for a pattern in files using grep (shows matching lines)",
     "input_schema": {
       "type": "object",
       "properties": {
-        "query": {
-          "type": "string",
-          "description": "The regex pattern to search for"
-        },
-        "path": {
-          "type": "string",
-          "description": "The directory to search in (default: current directory)"
-        }
+        "query": {"type": "string", "description": "The regex pattern to search for"},
+        "path": {"type": "string", "description": "The directory to search in (default: .)"}
       },
       "required": ["query"]
     }
   },
   {
-    "name": "list_files",
-    "description": "List files in a directory with optional pattern matching",
+    "name": "glob",
+    "description": "Find files matching a glob pattern (e.g., **/*.ts, src/**/*.js)",
     "input_schema": {
       "type": "object",
       "properties": {
-        "path": {
-          "type": "string",
-          "description": "The directory path (default: current directory)"
-        },
-        "pattern": {
-          "type": "string",
-          "description": "Glob pattern to match files (default: *)"
-        }
+        "pattern": {"type": "string", "description": "Glob pattern (e.g., **/*.ts)"},
+        "path": {"type": "string", "description": "Base directory (default: .)"}
+      },
+      "required": ["pattern"]
+    }
+  },
+  {
+    "name": "list_files",
+    "description": "List files in a directory (shallow). Use glob for recursive search.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string", "description": "The directory path (default: .)"},
+        "pattern": {"type": "string", "description": "Filename pattern (default: *)"}
       }
+    }
+  },
+  {
+    "name": "think",
+    "description": "Think/reason about the problem without taking action. Use for planning complex tasks.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "thought": {"type": "string", "description": "Your reasoning or plan"}
+      },
+      "required": ["thought"]
     }
   },
   {
@@ -179,10 +225,7 @@ get_anthropic_tools() {
     "input_schema": {
       "type": "object",
       "properties": {
-        "message": {
-          "type": "string",
-          "description": "Completion summary message"
-        }
+        "message": {"type": "string", "description": "Completion summary message"}
       },
       "required": ["message"]
     }
@@ -199,7 +242,7 @@ get_openai_tools() {
     "type": "function",
     "function": {
       "name": "read_file",
-      "description": "Read the contents of a file at the specified path",
+      "description": "Read the contents of a file",
       "parameters": {
         "type": "object",
         "properties": {
@@ -213,14 +256,73 @@ get_openai_tools() {
     "type": "function",
     "function": {
       "name": "write_file",
-      "description": "Write content to a file at the specified path",
+      "description": "Write content to a NEW file. For existing files, use edit_file.",
       "parameters": {
         "type": "object",
         "properties": {
-          "path": {"type": "string", "description": "The file path to write to"},
-          "content": {"type": "string", "description": "The content to write"}
+          "path": {"type": "string", "description": "The file path to write"},
+          "content": {"type": "string", "description": "The full content to write"}
         },
         "required": ["path", "content"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "edit_file",
+      "description": "Edit existing file by replacing a unique string",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string", "description": "The file path to edit"},
+          "old_string": {"type": "string", "description": "Exact string to replace (must be unique)"},
+          "new_string": {"type": "string", "description": "Replacement string"}
+        },
+        "required": ["path", "old_string", "new_string"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "delete_file",
+      "description": "Delete a file",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string", "description": "The file path to delete"}
+        },
+        "required": ["path"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "move_file",
+      "description": "Move or rename a file",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {"type": "string", "description": "Source file path"},
+          "destination": {"type": "string", "description": "Destination file path"}
+        },
+        "required": ["source", "destination"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "mkdir",
+      "description": "Create a directory",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string", "description": "Directory path to create"}
+        },
+        "required": ["path"]
       }
     }
   },
@@ -256,14 +358,43 @@ get_openai_tools() {
   {
     "type": "function",
     "function": {
+      "name": "glob",
+      "description": "Find files matching glob pattern (e.g., **/*.ts)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "pattern": {"type": "string", "description": "Glob pattern"},
+          "path": {"type": "string", "description": "Base directory (default: .)"}
+        },
+        "required": ["pattern"]
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
       "name": "list_files",
-      "description": "List files in directory",
+      "description": "List files in directory (shallow)",
       "parameters": {
         "type": "object",
         "properties": {
           "path": {"type": "string", "description": "Directory path (default: .)"},
-          "pattern": {"type": "string", "description": "Glob pattern (default: *)"}
+          "pattern": {"type": "string", "description": "Filename pattern (default: *)"}
         }
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "think",
+      "description": "Reason/plan without taking action",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "thought": {"type": "string", "description": "Your reasoning or plan"}
+        },
+        "required": ["thought"]
       }
     }
   },
@@ -297,10 +428,16 @@ You are a coding agent with access to tools. You MUST use tools to complete task
 
 AVAILABLE TOOLS:
 - read_file(path): Read contents of a file
-- write_file(path, content): Write content to a file
+- write_file(path, content): Write/create a file (overwrites if exists)
+- edit_file(path, old_string, new_string): Edit file by replacing old_string with new_string (old_string must be unique in file)
+- delete_file(path): Delete a file
+- move_file(source, destination): Move or rename a file
+- mkdir(path): Create a directory (with parents)
 - bash(command): Execute a shell command
-- search(query, path?): Search for pattern in files
-- list_files(path?, pattern?): List files in directory
+- search(query, path?): Search for pattern in files using grep
+- glob(pattern, path?): Find files matching glob pattern (e.g., **/*.ts, src/*.js)
+- list_files(path?, pattern?): List files in directory (shallow)
+- think(thought): Reason/plan without taking action - use this to think through complex problems
 - done(message): Mark task as complete
 
 RESPONSE FORMAT:
@@ -319,9 +456,11 @@ RULES:
 3. Use "reasoning" to explain your thought process
 4. When task is complete, use the "done" tool with a summary message
 5. If you need file contents, read them first before making changes
-6. Always verify your changes worked (e.g., run tests, build commands)
+6. For small edits, prefer edit_file over write_file to avoid rewriting entire files
+7. Use think to plan complex multi-step tasks before acting
+8. Always verify your changes worked (e.g., run tests, build commands)
 
-EXAMPLE WORKFLOW:
+EXAMPLE WORKFLOW - Creating a new file:
 User: "Create a hello.ts file that exports a greet function"
 
 Step 1: {"reasoning": "Creating the TypeScript file", "tool": "write_file", "params": {"path": "hello.ts", "content": "export function greet(name: string): string {\n  return `Hello, ${name}!`;\n}"}}
@@ -330,7 +469,30 @@ Step 1: {"reasoning": "Creating the TypeScript file", "tool": "write_file", "par
 Step 2: {"reasoning": "Verifying the file was created correctly", "tool": "read_file", "params": {"path": "hello.ts"}}
 [You receive the file contents]
 
-Step 3: {"reasoning": "Task complete - file created and verified", "tool": "done", "params": {"message": "Created hello.ts with greet function that takes a name and returns a greeting"}}
+Step 3: {"reasoning": "Task complete - file created and verified", "tool": "done", "params": {"message": "Created hello.ts with greet function"}}
+
+EXAMPLE WORKFLOW - Editing an existing file:
+User: "Change the greeting from Hello to Hi in hello.ts"
+
+Step 1: {"reasoning": "Reading the file first to see current content", "tool": "read_file", "params": {"path": "hello.ts"}}
+[You receive: "export function greet...return `Hello, ${name}!`..."]
+
+Step 2: {"reasoning": "Using edit_file to change Hello to Hi", "tool": "edit_file", "params": {"path": "hello.ts", "old_string": "return `Hello, ${name}!`;", "new_string": "return `Hi, ${name}!`;"}}
+[You receive: "✓ Edited: hello.ts"]
+
+Step 3: {"reasoning": "Task complete", "tool": "done", "params": {"message": "Changed greeting from Hello to Hi"}}
+
+EXAMPLE WORKFLOW - Finding and fixing files:
+User: "Find all TypeScript files and add 'use strict' to any that don't have it"
+
+Step 1: {"reasoning": "First, let me plan this task", "tool": "think", "params": {"thought": "1. Use glob to find all .ts files\n2. Read each file\n3. Check if it has 'use strict'\n4. If not, add it at the top using edit_file"}}
+[You receive: "Thought recorded"]
+
+Step 2: {"reasoning": "Finding all TypeScript files", "tool": "glob", "params": {"pattern": "**/*.ts"}}
+[You receive list of files]
+
+Step 3: {"reasoning": "Reading first file to check", "tool": "read_file", "params": {"path": "src/index.ts"}}
+...continue for each file...
 
 Remember: ONLY output JSON, nothing else!
 EOF
