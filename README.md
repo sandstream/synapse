@@ -1,0 +1,64 @@
+# Inferno CLI
+
+Standalone LLM-powered coding agent. Takes a prompt and generates code.
+
+## Usage
+
+```bash
+# Direct prompt
+./inferno-cli.sh "Create hello.txt with 'Hello World'"
+
+# From stdin
+echo "Add a sum function to math.ts" | ./inferno-cli.sh
+
+# From file
+./inferno-cli.sh --prompt-file prompt.txt
+
+# Verbose mode
+VERBOSE=true ./inferno-cli.sh "Create a React component"
+```
+
+## How it works
+
+1. Takes prompt via argument, stdin, or file
+2. Calls LLM API (Anthropic, OpenRouter, or Ollama)
+3. Parses JSON response
+4. Applies files and runs commands
+5. Returns exit code based on success
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_PROVIDER` | `anthropic` | Provider: anthropic, openrouter, ollama |
+| `LLM_MODEL` | `claude-sonnet-4-20250514` | Model name |
+| `LLM_MAX_TOKENS` | `8000` | Max output tokens |
+| `LLM_TIMEOUT` | `300` | Request timeout (seconds) |
+| `MAX_READ_FILES` | `20` | Max file read iterations |
+| `VERBOSE` | `false` | Show detailed output |
+| `ANTHROPIC_API_KEY` | - | Required for Anthropic |
+| `OPENROUTER_API_KEY` | - | Required for OpenRouter |
+
+## Exit Codes
+
+- `0` - Success (LLM marked done=true and commands succeeded)
+- `1` - Error (LLM error, JSON parse error, or commands failed)
+- `2` - Not done (LLM did not mark done=true)
+
+## JSON Response Format
+
+The LLM responds with:
+
+```json
+{
+  "files": [{"path": "file.ts", "content": "..."}],
+  "commands": ["npm install", "npm run build"],
+  "read_files": ["existing.ts"],
+  "done": true,
+  "message": "Created component"
+}
+```
+
+## License
+
+MIT
