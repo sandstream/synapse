@@ -269,13 +269,24 @@ get_provider_for_model() {
         claude-*|anthropic-*)
             echo "anthropic"
             ;;
-        gpt-*|o1-*)
+        gpt-*|o1-*|o3-*)
             echo "openai"
             ;;
-        llama*|mistral*|codellama*|phi-*)
+        gemini-*)
+            echo "google"
+            ;;
+        mistral-large*|mistral-small*|mistral-medium*|mistral-nemo*|ministral*|pixtral*|codestral*)
+            echo "mistral"
+            ;;
+        llama-3.3-*|llama-3.1-*|llama3-*|mixtral-8x7b-*|gemma2-*|llama-guard-*)
+            # Groq model patterns (fast inference)
+            echo "groq"
+            ;;
+        llama*|mistral*|codellama*|phi-*|qwen*|deepseek-coder*)
+            # Local models via Ollama
             echo "ollama"
             ;;
-        deepseek-*|gemini-*|meta-*)
+        deepseek-*|meta-*)
             echo "openrouter"
             ;;
         *)

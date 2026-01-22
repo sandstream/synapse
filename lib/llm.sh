@@ -3,18 +3,18 @@
 # lib/llm.sh - Dual-Mode LLM API (Native Tool-Use + JSON Proxy)
 #
 # Universal Agent Proxy - Makes ANY model an agent through:
-#   1. Native tool-use for supported providers (Anthropic, OpenAI)
+#   1. Native tool-use for supported providers (Anthropic, OpenAI, Google)
 #   2. JSON proxy mode for all other models (DeepSeek, Ollama, etc)
 #
-# Supports: anthropic, openrouter, ollama, openai
+# Supports: anthropic, openrouter, ollama, openai, google, mistral, groq
 #
 # Environment:
-#   LLM_PROVIDER      - anthropic (default), openrouter, ollama, openai
+#   LLM_PROVIDER      - anthropic (default), openrouter, ollama, openai, google, mistral, groq
 #   LLM_MODEL         - Model name (provider-specific)
 #   LLM_MAX_TOKENS    - Max output tokens (default: 8000)
 #   LLM_TIMEOUT       - Request timeout in seconds (default: 300)
 #   INFERNO_MODE      - auto (default), native, proxy - force specific mode
-#   ANTHROPIC_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY - API keys
+#   ANTHROPIC_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY / MISTRAL_API_KEY / GROQ_API_KEY - API keys
 # =============================================================================
 
 # Defaults
@@ -29,6 +29,9 @@ get_default_model() {
         anthropic)  echo "claude-sonnet-4-20250514" ;;
         openrouter) echo "anthropic/claude-sonnet-4" ;;
         openai)     echo "gpt-4o" ;;
+        google)     echo "gemini-2.0-flash" ;;
+        mistral)    echo "mistral-large-latest" ;;
+        groq)       echo "llama-3.3-70b-versatile" ;;
         ollama)     echo "llama3.1" ;;
         *)          echo "claude-sonnet-4-20250514" ;;
     esac
@@ -58,6 +61,15 @@ supports_native_tools() {
             ;;
         openai)
             return 0  # GPT-4, GPT-3.5-turbo support tools
+            ;;
+        google)
+            return 0  # Gemini models support function calling
+            ;;
+        mistral)
+            return 0  # Mistral models support function calling
+            ;;
+        groq)
+            return 0  # Groq supports function calling (OpenAI-compatible)
             ;;
         openrouter)
             # Only Anthropic and OpenAI models via OpenRouter support native tools
@@ -773,6 +785,151 @@ call_openai_with_tools() {
         "https://api.openai.com/v1/chat/completions"
 }
 
+# Get tools array for Google Gemini API format
+get_google_tools() {
+    cat << 'EOF'
+[{
+  "function_declarations": [
+    {"name": "read_file", "description": "Read the contents of a file", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "The file path to read"}}, "required": ["path"]}},
+    {"name": "write_file", "description": "Write content to a NEW file. For existing files, use edit_file.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "The file path to write"}, "content": {"type": "string", "description": "The full content to write"}}, "required": ["path", "content"]}},
+    {"name": "edit_file", "description": "Edit existing file by replacing a unique string", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "The file path to edit"}, "old_string": {"type": "string", "description": "Exact string to replace (must be unique)"}, "new_string": {"type": "string", "description": "Replacement string"}}, "required": ["path", "old_string", "new_string"]}},
+    {"name": "multi_edit", "description": "Multiple edits on a single file in one operation", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "The file path to edit"}, "edits": {"type": "array", "description": "Array of {old_string, new_string} objects"}}, "required": ["path", "edits"]}},
+    {"name": "git", "description": "Git version control operations", "parameters": {"type": "object", "properties": {"action": {"type": "string", "description": "status/diff/staged/add/commit/log/undo/branch/stash"}, "message": {"type": "string", "description": "Commit message (for commit)"}, "files": {"description": "File(s) for add/diff"}}, "required": ["action"]}},
+    {"name": "delete_file", "description": "Delete a file", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "The file path to delete"}}, "required": ["path"]}},
+    {"name": "move_file", "description": "Move or rename a file", "parameters": {"type": "object", "properties": {"source": {"type": "string", "description": "Source file path"}, "destination": {"type": "string", "description": "Destination file path"}}, "required": ["source", "destination"]}},
+    {"name": "mkdir", "description": "Create a directory", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Directory path to create"}}, "required": ["path"]}},
+    {"name": "bash", "description": "Execute a shell command", "parameters": {"type": "object", "properties": {"command": {"type": "string", "description": "The command to execute"}}, "required": ["command"]}},
+    {"name": "search", "description": "Search for pattern in files using grep", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "The regex pattern"}, "path": {"type": "string", "description": "Directory to search (default: .)"}}, "required": ["query"]}},
+    {"name": "glob", "description": "Find files matching glob pattern (e.g., **/*.ts)", "parameters": {"type": "object", "properties": {"pattern": {"type": "string", "description": "Glob pattern"}, "path": {"type": "string", "description": "Base directory (default: .)"}}, "required": ["pattern"]}},
+    {"name": "list_files", "description": "List files in directory (shallow)", "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "Directory path (default: .)"}, "pattern": {"type": "string", "description": "Filename pattern (default: *)"}}}},
+    {"name": "think", "description": "Reason/plan without taking action", "parameters": {"type": "object", "properties": {"thought": {"type": "string", "description": "Your reasoning or plan"}}, "required": ["thought"]}},
+    {"name": "ask_user", "description": "Ask the user a question and wait for response", "parameters": {"type": "object", "properties": {"question": {"type": "string", "description": "The question to ask"}, "options": {"type": "array", "items": {"type": "string"}, "description": "Optional choices"}}, "required": ["question"]}},
+    {"name": "web_fetch", "description": "Fetch content from a URL", "parameters": {"type": "object", "properties": {"url": {"type": "string", "description": "The URL to fetch"}}, "required": ["url"]}},
+    {"name": "web_search", "description": "Search the web for information", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Search query"}}, "required": ["query"]}},
+    {"name": "todo", "description": "Manage internal task list", "parameters": {"type": "object", "properties": {"action": {"type": "string", "description": "add, list, complete, or clear"}, "items": {"description": "Task(s) to add or complete"}}, "required": ["action"]}},
+    {"name": "spawn_agent", "description": "Spawn sub-agent for parallel work", "parameters": {"type": "object", "properties": {"task": {"type": "string", "description": "Task for the sub-agent"}, "model": {"type": "string", "description": "Specific model (optional)"}}, "required": ["task"]}},
+    {"name": "done", "description": "Mark task as complete", "parameters": {"type": "object", "properties": {"message": {"type": "string", "description": "Completion message"}}, "required": ["message"]}}
+  ]
+}]
+EOF
+}
+
+# Call Google Gemini API with native function calling
+call_google_with_tools() {
+    local messages_json="$1"
+    local system_prompt="${2:-You are a helpful coding assistant.}"
+
+    if [ -z "${GOOGLE_API_KEY:-}" ]; then
+        echo '{"error": "GOOGLE_API_KEY not set"}' >&2
+        return 1
+    fi
+
+    local tools
+    tools=$(get_google_tools)
+
+    # Convert messages to Gemini format (contents array)
+    local contents
+    contents=$(echo "$messages_json" | jq -c '[.[] | {role: (if .role == "assistant" then "model" else .role end), parts: [{text: .content}]}]')
+
+    local request_body
+    request_body=$(jq -n \
+        --arg system "$system_prompt" \
+        --argjson contents "$contents" \
+        --argjson tools "$tools" \
+        --argjson max_tokens "$LLM_MAX_TOKENS" \
+        '{
+            system_instruction: {parts: [{text: $system}]},
+            contents: $contents,
+            tools: $tools,
+            generationConfig: {maxOutputTokens: $max_tokens}
+        }')
+
+    curl -s --max-time "$LLM_TIMEOUT" \
+        -H "Content-Type: application/json" \
+        -d "$request_body" \
+        "https://generativelanguage.googleapis.com/v1beta/models/${LLM_MODEL}:generateContent?key=${GOOGLE_API_KEY}"
+}
+
+# Call Mistral API with native function calling (OpenAI-compatible)
+call_mistral_with_tools() {
+    local messages_json="$1"
+    local system_prompt="${2:-You are a helpful coding assistant.}"
+
+    if [ -z "${MISTRAL_API_KEY:-}" ]; then
+        echo '{"error": "MISTRAL_API_KEY not set"}' >&2
+        return 1
+    fi
+
+    local tools
+    tools=$(get_openai_tools)
+
+    # Prepend system message
+    local full_messages
+    full_messages=$(jq -n \
+        --arg system "$system_prompt" \
+        --argjson messages "$messages_json" \
+        '[{"role": "system", "content": $system}] + $messages')
+
+    local request_body
+    request_body=$(jq -n \
+        --arg model "$LLM_MODEL" \
+        --argjson max_tokens "$LLM_MAX_TOKENS" \
+        --argjson messages "$full_messages" \
+        --argjson tools "$tools" \
+        '{
+            model: $model,
+            max_tokens: $max_tokens,
+            messages: $messages,
+            tools: $tools
+        }')
+
+    curl -s --max-time "$LLM_TIMEOUT" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $MISTRAL_API_KEY" \
+        -d "$request_body" \
+        "https://api.mistral.ai/v1/chat/completions"
+}
+
+# Call Groq API with native function calling (OpenAI-compatible)
+call_groq_with_tools() {
+    local messages_json="$1"
+    local system_prompt="${2:-You are a helpful coding assistant.}"
+
+    if [ -z "${GROQ_API_KEY:-}" ]; then
+        echo '{"error": "GROQ_API_KEY not set"}' >&2
+        return 1
+    fi
+
+    local tools
+    tools=$(get_openai_tools)
+
+    # Prepend system message
+    local full_messages
+    full_messages=$(jq -n \
+        --arg system "$system_prompt" \
+        --argjson messages "$messages_json" \
+        '[{"role": "system", "content": $system}] + $messages')
+
+    local request_body
+    request_body=$(jq -n \
+        --arg model "$LLM_MODEL" \
+        --argjson max_tokens "$LLM_MAX_TOKENS" \
+        --argjson messages "$full_messages" \
+        --argjson tools "$tools" \
+        '{
+            model: $model,
+            max_tokens: $max_tokens,
+            messages: $messages,
+            tools: $tools
+        }')
+
+    curl -s --max-time "$LLM_TIMEOUT" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $GROQ_API_KEY" \
+        -d "$request_body" \
+        "https://api.groq.com/openai/v1/chat/completions"
+}
+
 # =============================================================================
 # API Calls - JSON Proxy Mode
 # =============================================================================
@@ -793,6 +950,15 @@ call_with_json_proxy() {
             ;;
         openai)
             call_openai_proxy "$messages_json" "$system_prompt"
+            ;;
+        google)
+            call_google_proxy "$messages_json" "$system_prompt"
+            ;;
+        mistral)
+            call_mistral_proxy "$messages_json" "$system_prompt"
+            ;;
+        groq)
+            call_groq_proxy "$messages_json" "$system_prompt"
             ;;
         ollama)
             call_ollama_proxy "$messages_json" "$system_prompt"
@@ -950,6 +1116,119 @@ call_ollama_proxy() {
     echo "$response" | jq -r '.message.content // empty'
 }
 
+# Google in proxy mode (without function calling)
+call_google_proxy() {
+    local messages_json="$1"
+    local system_prompt="$2"
+
+    if [ -z "${GOOGLE_API_KEY:-}" ]; then
+        echo '{"error": "GOOGLE_API_KEY not set"}' >&2
+        return 1
+    fi
+
+    # Convert messages to Gemini format
+    local contents
+    contents=$(echo "$messages_json" | jq -c '[.[] | {role: (if .role == "assistant" then "model" else .role end), parts: [{text: .content}]}]')
+
+    local request_body
+    request_body=$(jq -n \
+        --arg system "$system_prompt" \
+        --argjson contents "$contents" \
+        --argjson max_tokens "$LLM_MAX_TOKENS" \
+        '{
+            system_instruction: {parts: [{text: $system}]},
+            contents: $contents,
+            generationConfig: {maxOutputTokens: $max_tokens}
+        }')
+
+    local response
+    response=$(curl -s --max-time "$LLM_TIMEOUT" \
+        -H "Content-Type: application/json" \
+        -d "$request_body" \
+        "https://generativelanguage.googleapis.com/v1beta/models/${LLM_MODEL}:generateContent?key=${GOOGLE_API_KEY}")
+
+    # Extract text content from Gemini response
+    echo "$response" | jq -r '.candidates[0].content.parts[0].text // empty'
+}
+
+# Mistral in proxy mode (OpenAI-compatible)
+call_mistral_proxy() {
+    local messages_json="$1"
+    local system_prompt="$2"
+
+    if [ -z "${MISTRAL_API_KEY:-}" ]; then
+        echo '{"error": "MISTRAL_API_KEY not set"}' >&2
+        return 1
+    fi
+
+    # Prepend system message
+    local full_messages
+    full_messages=$(jq -n \
+        --arg system "$system_prompt" \
+        --argjson messages "$messages_json" \
+        '[{"role": "system", "content": $system}] + $messages')
+
+    local request_body
+    request_body=$(jq -n \
+        --arg model "$LLM_MODEL" \
+        --argjson max_tokens "$LLM_MAX_TOKENS" \
+        --argjson messages "$full_messages" \
+        '{
+            model: $model,
+            max_tokens: $max_tokens,
+            messages: $messages
+        }')
+
+    local response
+    response=$(curl -s --max-time "$LLM_TIMEOUT" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $MISTRAL_API_KEY" \
+        -d "$request_body" \
+        "https://api.mistral.ai/v1/chat/completions")
+
+    # Extract text content
+    echo "$response" | jq -r '.choices[0].message.content // empty'
+}
+
+# Groq in proxy mode (OpenAI-compatible)
+call_groq_proxy() {
+    local messages_json="$1"
+    local system_prompt="$2"
+
+    if [ -z "${GROQ_API_KEY:-}" ]; then
+        echo '{"error": "GROQ_API_KEY not set"}' >&2
+        return 1
+    fi
+
+    # Prepend system message
+    local full_messages
+    full_messages=$(jq -n \
+        --arg system "$system_prompt" \
+        --argjson messages "$messages_json" \
+        '[{"role": "system", "content": $system}] + $messages')
+
+    local request_body
+    request_body=$(jq -n \
+        --arg model "$LLM_MODEL" \
+        --argjson max_tokens "$LLM_MAX_TOKENS" \
+        --argjson messages "$full_messages" \
+        '{
+            model: $model,
+            max_tokens: $max_tokens,
+            messages: $messages
+        }')
+
+    local response
+    response=$(curl -s --max-time "$LLM_TIMEOUT" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $GROQ_API_KEY" \
+        -d "$request_body" \
+        "https://api.groq.com/openai/v1/chat/completions")
+
+    # Extract text content
+    echo "$response" | jq -r '.choices[0].message.content // empty'
+}
+
 # =============================================================================
 # Unified API Calls
 # =============================================================================
@@ -969,6 +1248,15 @@ call_llm_agent() {
                 ;;
             openai)
                 call_openai_with_tools "$messages_json" "$system_prompt"
+                ;;
+            google)
+                call_google_with_tools "$messages_json" "$system_prompt"
+                ;;
+            mistral)
+                call_mistral_with_tools "$messages_json" "$system_prompt"
+                ;;
+            groq)
+                call_groq_with_tools "$messages_json" "$system_prompt"
                 ;;
             openrouter)
                 # For OpenRouter with Anthropic models, use their format
@@ -1008,6 +1296,15 @@ call_llm() {
             ;;
         openai)
             call_openai_proxy "$messages" "You are a helpful coding assistant."
+            ;;
+        google)
+            call_google_proxy "$messages" "You are a helpful coding assistant."
+            ;;
+        mistral)
+            call_mistral_proxy "$messages" "You are a helpful coding assistant."
+            ;;
+        groq)
+            call_groq_proxy "$messages" "You are a helpful coding assistant."
             ;;
         ollama)
             call_ollama_proxy "$messages" "You are a helpful coding assistant."
