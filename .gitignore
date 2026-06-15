@@ -1,0 +1,14 @@
+# Local config (may hold API keys) — never commit
+.synapserc
+.env
+.env.*
+
+# Secrets
+*.key
+*.pem
+credentials.*
+secrets/
+
+# Dependencies / build
+node_modules/
+dist/
